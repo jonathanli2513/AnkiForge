@@ -1,6 +1,7 @@
 import { Router, Request, Response } from 'express';
 import { v4 as uuidv4 } from 'uuid';
 import path from 'path';
+import fs from 'fs';
 import { upload } from '../middleware/upload';
 import { jobStore } from '../utils/jobStore';
 import { extractFile } from '../services/extraction';
@@ -159,6 +160,10 @@ async function processFiles(jobId: string, files: Express.Multer.File[]) {
       const occCard = await buildOcclusionCard(file.path, imageUrl, { fileName: file.originalname, pageNumber: 1 }, baseTags);
       if (occCard) allCards.push(occCard);
     }
+
+    // Original file is no longer needed after extraction — delete it now to
+    // free space. Rendered PNGs (created later) are cleaned up on next startup.
+    fs.unlink(file.path, () => {});
 
     jobStore.update(jobId, {
       status: 'generating',

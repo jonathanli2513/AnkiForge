@@ -1,0 +1,45 @@
+# ── Dependencies ────────────────────────────────────────────────────────────
+node_modules/
+
+# ── Build outputs ────────────────────────────────────────────────────────────
+client/dist/
+server/dist/
+dist/
+
+# ── Environment & secrets ────────────────────────────────────────────────────
+.env
+.env.local
+.env.*.local
+# Keep the example file so collaborators know what vars are needed
+!.env.example
+
+# ── Runtime uploads (user files, rendered PNGs, temp Python scripts) ─────────
+server/uploads/*
+!server/uploads/.gitkeep
+
+# ── OS / editor noise ────────────────────────────────────────────────────────
+.DS_Store
+Thumbs.db
+*.suo
+*.ntvs*
+*.njsproj
+*.sln
+*.sw?
+
+# ── IDE ──────────────────────────────────────────────────────────────────────
+.vscode/*
+!.vscode/extensions.json
+.idea/
+
+# ── Logs ─────────────────────────────────────────────────────────────────────
+logs/
+*.log
+npm-debug.log*
+yarn-debug.log*
+pnpm-debug.log*
+
+# ── TypeScript incremental build cache ───────────────────────────────────────
+*.tsbuildinfo
+
+# ── Claude Code project files (local dev tool state) ─────────────────────────
+.claude/

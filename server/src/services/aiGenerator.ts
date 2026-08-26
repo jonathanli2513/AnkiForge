@@ -5,8 +5,8 @@ import { v4 as uuidv4 } from 'uuid';
 
 const groq = new Groq({ apiKey: process.env.GROQ_API_KEY });
 
-const MODEL = 'llama-3.3-70b-versatile';
-const VISION_MODEL = 'meta-llama/llama-4-scout-17b-16e-instruct';
+const MODEL = process.env.GROQ_TEXT_MODEL?.trim() || 'openai/gpt-oss-120b';
+const VISION_MODEL = process.env.GROQ_VISION_MODEL?.trim() || 'qwen/qwen3.6-27b';
 
 const CHUNK_SIZE = 2200;
 const CHUNK_OVERLAP = 300;

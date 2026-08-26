@@ -8,6 +8,7 @@ import { extractFile } from '../services/extraction';
 import { generateCardsForPage, generateCardsFromImage, detectOcclusionRegions } from '../services/aiGenerator';
 import { renderPdfPage, extractPageLabels, getImageDimensions } from '../services/pdfRenderer';
 import type { Flashcard, OcclusionMask } from '../types/index';
+import { isModelPoolExhausted } from '../services/modelPool';
 
 const UPLOADS_DIR = path.join(__dirname, '../../uploads');
 
@@ -110,7 +111,8 @@ async function buildOcclusionCard(
       createdAt: now,
       updatedAt: now,
     };
-  } catch {
+  } catch (error) {
+    if (isModelPoolExhausted(error)) throw error;
     return null;
   }
 }
@@ -119,6 +121,8 @@ async function processFiles(jobId: string, files: Express.Multer.File[]) {
   const allCards: Flashcard[] = [];
   const generationErrors: string[] = [];
   const totalFiles = files.length;
+  let stoppedEarly = false;
+  let stopReason = '';
 
   for (let fi = 0; fi < files.length; fi++) {
     const file = files[fi];
@@ -144,6 +148,7 @@ async function processFiles(jobId: string, files: Express.Multer.File[]) {
         status: 'error',
         error: `Failed to extract ${file.originalname}: ${err.message}`,
       });
+      fs.unlink(file.path, () => {});
       return;
     }
 
@@ -156,14 +161,14 @@ async function processFiles(jobId: string, files: Express.Multer.File[]) {
         progress: baseProgress + 5,
         message: `Auto-detecting diagram regions in ${file.originalname}…`,
       });
-      const imageUrl = `/uploads/${path.basename(file.path)}`;
-      const occCard = await buildOcclusionCard(file.path, imageUrl, { fileName: file.originalname, pageNumber: 1 }, baseTags);
-      if (occCard) allCards.push(occCard);
+      try {
+        const imageUrl = `/uploads/${path.basename(file.path)}`;
+        const occCard = await buildOcclusionCard(file.path, imageUrl, { fileName: file.originalname, pageNumber: 1 }, baseTags);
+        if (occCard) allCards.push(occCard);
+      } catch (err: any) {
+        generationErrors.push(err.message ?? 'Image analysis failed');
+      }
     }
-
-    // Original file is no longer needed after extraction — delete it now to
-    // free space. Rendered PNGs (created later) are cleaned up on next startup.
-    fs.unlink(file.path, () => {});
 
     jobStore.update(jobId, {
       status: 'generating',
@@ -252,8 +257,9 @@ async function processFiles(jobId: string, files: Express.Multer.File[]) {
               allCards.push(...visionCards);
             }
           }
-        } catch {
-          // Non-fatal
+        } catch (err: any) {
+          // Vision is optional when useful text is available on the same page.
+          generationErrors.push(err.message ?? 'Image analysis failed');
         }
       }
 
@@ -263,18 +269,41 @@ async function processFiles(jobId: string, files: Express.Multer.File[]) {
       const hasSubstantiveText = textLen >= 500;
       const shouldGenerateTextCards = !isImageHeavyPage || (pageHasOcclusionCard && hasSubstantiveText);
       if (shouldGenerateTextCards) {
+        const pageCardStart = allCards.length;
         try {
-          const cards = await generateCardsForPage(
+          await generateCardsForPage(
             page,
             { fileName: file.originalname, pageNumber: page.pageNumber, sectionTitle: page.sectionTitle },
-            extraTags
+            extraTags,
+            partialCards => {
+              allCards.splice(pageCardStart, allCards.length - pageCardStart, ...partialCards);
+              jobStore.update(jobId, {
+                cards: [...allCards],
+                message: `Saved ${allCards.length} cards · ${file.originalname} page ${pi + 1}/${totalPages}`,
+              });
+            }
           );
-          allCards.push(...cards);
         } catch (err: any) {
           generationErrors.push(err.message ?? 'Unknown error');
+          if (isModelPoolExhausted(err)) {
+            stoppedEarly = true;
+            stopReason = err.message;
+          }
         }
       }
+
+      // Make each completed page recoverable in the browser while the next page runs.
+      jobStore.update(jobId, {
+        cards: [...allCards],
+        message: `Saved ${allCards.length} cards · ${file.originalname} page ${pi + 1}/${totalPages}`,
+      });
+
+      if (stoppedEarly) break;
     }
+
+    // Keep PDFs only while page rendering needs them, then remove the upload.
+    fs.unlink(file.path, () => {});
+    if (stoppedEarly) break;
   }
 
   if (allCards.length === 0 && generationErrors.length > 0) {
@@ -292,8 +321,16 @@ async function processFiles(jobId: string, files: Express.Multer.File[]) {
   jobStore.update(jobId, {
     status: 'complete',
     progress: 100,
-    message: `Generated ${allCards.length} flashcard${allCards.length !== 1 ? 's' : ''}`,
+    message: stoppedEarly
+      ? `Saved ${allCards.length} cards before the free daily limits were reached`
+      : `Generated ${allCards.length} flashcard${allCards.length !== 1 ? 's' : ''}`,
     cards: allCards,
+    partial: stoppedEarly || generationErrors.length > 0,
+    warning: stoppedEarly
+      ? stopReason
+      : generationErrors.length > 0
+        ? 'Some pages could not be processed, but all completed cards were saved.'
+        : undefined,
   });
 }
 

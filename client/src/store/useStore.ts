@@ -1,4 +1,5 @@
 import { create } from 'zustand';
+import { createJSONStorage, persist } from 'zustand/middleware';
 import type { Flashcard, GenerationJob } from '../types';
 
 interface AppState {
@@ -33,7 +34,7 @@ interface AppState {
   uniqueFiles: () => string[];
 }
 
-export const useStore = create<AppState>((set, get) => ({
+export const useStore = create<AppState>()(persist((set, get) => ({
   currentJob: null,
   setCurrentJob: (job) => set({ currentJob: job }),
 
@@ -103,6 +104,15 @@ export const useStore = create<AppState>((set, get) => ({
     const { cards } = get();
     return [...new Set(cards.map(c => c.source.fileName))];
   },
+}), {
+  name: 'ankiforge-study-data',
+  version: 1,
+  storage: createJSONStorage(() => localStorage),
+  partialize: state => ({
+    currentJob: state.currentJob,
+    cards: state.cards,
+    deckName: state.deckName,
+  }),
 }));
 
 // Need uuid on client too — add inline since uuid is not in client deps

@@ -47,4 +47,6 @@ export interface GenerationJob {
   files: string[];
   cards?: Flashcard[];
   error?: string;
+  partial?: boolean;
+  warning?: string;
 }

@@ -47,7 +47,7 @@ Requires:
 | Backend | Node.js, Express, TypeScript, ts-node |
 | State | Zustand |
 | Routing | React Router v7 |
-| AI — text cards | Groq SDK, `openai/gpt-oss-120b` |
+| AI — text cards | Groq SDK fallback pool: `openai/gpt-oss-20b`, `qwen/qwen3.6-27b`, `openai/gpt-oss-120b` |
 | AI — vision/occlusion | Groq SDK, `qwen/qwen3.6-27b` |
 | PDF processing | PyMuPDF (`fitz`) via Python subprocess |
 | Anki export | `anki-apkg-export` npm package |

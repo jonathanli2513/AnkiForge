@@ -47,8 +47,8 @@ Requires:
 | Backend | Node.js, Express, TypeScript, ts-node |
 | State | Zustand |
 | Routing | React Router v7 |
-| AI — text cards | Groq SDK, `llama-3.3-70b-versatile` |
-| AI — vision/occlusion | Groq SDK, `meta-llama/llama-4-scout-17b-16e-instruct` |
+| AI — text cards | Groq SDK, `openai/gpt-oss-120b` |
+| AI — vision/occlusion | Groq SDK, `qwen/qwen3.6-27b` |
 | PDF processing | PyMuPDF (`fitz`) via Python subprocess |
 | Anki export | `anki-apkg-export` npm package |
 | File uploads | Multer |

@@ -2,49 +2,65 @@ import Groq from 'groq-sdk';
 import fs from 'fs';
 import type { Flashcard, ProcessedPage, CardSource } from '../types/index';
 import { v4 as uuidv4 } from 'uuid';
+import { buildModelPool, runWithModelFallback } from './modelPool';
 
 const groq = new Groq({ apiKey: process.env.GROQ_API_KEY });
 
-const MODEL = process.env.GROQ_TEXT_MODEL?.trim() || 'openai/gpt-oss-120b';
-const VISION_MODEL = process.env.GROQ_VISION_MODEL?.trim() || 'qwen/qwen3.6-27b';
+const TEXT_MODELS = buildModelPool(
+  process.env.GROQ_TEXT_MODELS,
+  process.env.GROQ_TEXT_MODEL,
+  ['openai/gpt-oss-20b', 'qwen/qwen3.6-27b', 'openai/gpt-oss-120b']
+);
+const VISION_MODELS = buildModelPool(
+  process.env.GROQ_VISION_MODELS,
+  process.env.GROQ_VISION_MODEL,
+  ['qwen/qwen3.6-27b']
+);
 
-const CHUNK_SIZE = 2200;
-const CHUNK_OVERLAP = 300;
+// Larger chunks repeat the instruction prompt less often and substantially reduce
+// daily token use while preserving enough context for coherent cards.
+const CHUNK_SIZE = 6000;
+const CHUNK_OVERLAP = 150;
+const TEXT_OUTPUT_TOKENS = 1200;
 
-const SYSTEM_PROMPT = `You are an expert Anki flashcard creator for university students. Your goal is EFFICIENT, NON-REDUNDANT COVERAGE — every important concept must be tested, but not more than once.
+const SYSTEM_PROMPT = `Create efficient Anki flashcards for university students.
 
-CARDINAL RULES:
-1. NO REDUNDANCY — if a fact is already implied by another card in your output, do not make a separate card for it. Never generate cards that re-test the same structure, name, or fact in a slightly different way.
-2. INFORMATION DENSITY — each card must test a non-obvious, meaningful piece of knowledge. Skip cards where the answer is trivially named or already universally known from context (e.g. do not ask "What bone is at the top of the knee?" if the answer is obvious from surrounding cards).
-3. SYNTHESISE SMALL FACTS — when 2–4 closely related small facts exist (e.g. a structure's attachment points, a ligament's attachments and function), combine them into ONE card rather than making separate cards for each tiny detail.
-4. MULTI-BLANK CLOZE — use cloze cards with multiple blanks ({{c1::...}}, {{c2::...}}, {{c3::...}}) to test several related facts in one card. Example: "The {{c1::ACL}} prevents {{c2::anterior translation}} of the tibia and limits {{c3::external rotation}} of the knee."
-5. PREFER MECHANISM AND RELATIONSHIP CARDS over simple naming cards. Ask WHY, HOW, WHAT HAPPENS WHEN, WHAT IS THE DIFFERENCE BETWEEN.
-6. For tables (origin/insertion/action): one card per row that tests all columns together, e.g. "Sartorius: origin = {{c1::ASIS}}, insertion = {{c2::medial tibia}}, actions = {{c3::knee flexion, hip flexion, abduction, lateral rotation}}."
+Rules:
+1. Test each important fact once; do not make near-duplicate cards.
+2. Combine 2–4 closely related facts into one dense card.
+3. Prefer mechanisms, relationships, comparisons, and consequences over trivial naming.
+4. Use multi-blank cloze cards for related facts: {{c1::...}}, {{c2::...}}.
+5. For tables, make one cloze card per meaningful row and combine its columns.
 
 Card types:
-- "basic": Q&A (front = question, back = concise answer)
-- "cloze": sentence with {{c1::hidden}}, {{c2::hidden}}, etc. in clozeText; front = same sentence with blanks shown as [...]; back = filled sentence
+- "basic": concise question and answer
+- "cloze": clozeText contains {{c1::hidden}} fields; front shows [...]; back is filled
 
-Respond ONLY with a valid JSON array. No markdown fences, no prose.
-
-Each object:
-{
-  "cardType": "basic" or "cloze",
-  "front": "question or cloze sentence with [...] placeholders",
-  "back": "answer or complete filled sentence",
-  "clozeText": "sentence with {{c1::hidden}} ... (cloze only — omit for basic)",
-  "tags": ["Topic", "SubTopic"],
-  "confidenceScore": 0.0 to 1.0
-}`;
+Return only a JSON array. Each object has cardType, front, back, optional clozeText,
+tags (string array), and confidenceScore (0–1).`;
 
 function buildChunkPrompt(chunk: string, chunkIndex: number, totalChunks: number, fileName: string, pageNum: number | undefined, sectionTitle: string | undefined): string {
   const ctx = sectionTitle ? `Section: ${sectionTitle}\n` : '';
   const part = totalChunks > 1 ? ` (part ${chunkIndex + 1}/${totalChunks})` : '';
   return `${ctx}Source: ${fileName}${pageNum !== undefined ? `, Page ${pageNum}` : ''}${part}
 
-Generate 4-10 non-redundant flashcards. Synthesise small related facts into multi-blank cloze cards. Cover every important concept once — do not test the same fact twice in different wordings. Return a JSON array only:
+Generate 4–8 non-redundant flashcards. Combine small related facts into multi-blank cloze cards. Return a JSON array only:
 
 ${chunk}`;
+}
+
+function reasoningOptions(model: string): Record<string, unknown> {
+  if (model.startsWith('openai/gpt-oss-')) {
+    return { reasoning_effort: 'low', include_reasoning: false };
+  }
+  if (model.startsWith('qwen/')) {
+    return { reasoning_effort: 'none' };
+  }
+  return {};
+}
+
+function logFallback(fromModel: string, toModel: string) {
+  console.warn(`[AnkiForge] ${fromModel} is unavailable; trying free fallback ${toModel}.`);
 }
 
 function splitIntoChunks(text: string): string[] {
@@ -82,15 +98,21 @@ async function generateCardsForChunk(
   source: CardSource,
   baseTags: string[]
 ): Promise<Flashcard[]> {
-  const completion = await groq.chat.completions.create({
-    model: MODEL,
-    temperature: 0.3,
-    max_tokens: 3000,
-    messages: [
-      { role: 'system', content: SYSTEM_PROMPT },
-      { role: 'user', content: buildChunkPrompt(chunk, chunkIndex, totalChunks, source.fileName, source.pageNumber, source.sectionTitle) },
-    ],
-  });
+  const completion: any = await runWithModelFallback(
+    TEXT_MODELS,
+    model => groq.chat.completions.create({
+      model,
+      temperature: 0.3,
+      max_completion_tokens: TEXT_OUTPUT_TOKENS,
+      ...reasoningOptions(model),
+      messages: [
+        { role: 'system', content: SYSTEM_PROMPT },
+        { role: 'user', content: buildChunkPrompt(chunk, chunkIndex, totalChunks, source.fileName, source.pageNumber, source.sectionTitle) },
+      ],
+    } as any),
+    'text-generation',
+    logFallback
+  );
 
   const raw = completion.choices[0]?.message?.content ?? '';
   let parsed: any[] = [];
@@ -132,7 +154,8 @@ async function generateCardsForChunk(
 export async function generateCardsForPage(
   page: ProcessedPage,
   source: CardSource,
-  extraTags: string[] = []
+  extraTags: string[] = [],
+  onProgress?: (cards: Flashcard[]) => void
 ): Promise<Flashcard[]> {
   const text = page.text.trim();
   if (text.length < 50) return [];
@@ -148,6 +171,7 @@ export async function generateCardsForPage(
   for (let i = 0; i < chunks.length; i++) {
     const cards = await generateCardsForChunk(chunks[i], i, chunks.length, source, baseTags);
     allCards.push(...cards);
+    onProgress?.(deduplicateCards(allCards));
   }
 
   return deduplicateCards(allCards);
@@ -171,21 +195,27 @@ export async function generateCardsFromImage(
 [{ "cardType": "basic", "front": "question or cloze with [...] blanks", "back": "answer", "clozeText": "sentence with {{c1::hidden}} blanks (cloze only)", "tags": ["Tag"], "confidenceScore": 0.9 }]`;
 
   const dataUrl = toDataUrl(imagePath);
-  const completion = await groq.chat.completions.create({
-    model: VISION_MODEL,
-    temperature: 0.3,
-    max_tokens: 4096,
-    messages: [
-      { role: 'system', content: imageSystemPrompt },
-      {
-        role: 'user',
-        content: [
-          { type: 'image_url', image_url: { url: dataUrl } },
-          { type: 'text', text: imageUserPrompt },
-        ],
-      },
-    ],
-  } as any);
+  const completion: any = await runWithModelFallback(
+    VISION_MODELS,
+    model => groq.chat.completions.create({
+      model,
+      temperature: 0.3,
+      max_completion_tokens: 1800,
+      ...reasoningOptions(model),
+      messages: [
+        { role: 'system', content: imageSystemPrompt },
+        {
+          role: 'user',
+          content: [
+            { type: 'image_url', image_url: { url: dataUrl } },
+            { type: 'text', text: imageUserPrompt },
+          ],
+        },
+      ],
+    } as any),
+    'vision',
+    logFallback
+  );
 
   const raw = completion.choices[0]?.message?.content ?? '';
   let parsed: any[] = [];
@@ -243,18 +273,24 @@ Return ONLY a valid JSON array, no prose, no markdown fences. Each element:
 All numbers are percentages of image dimensions (0–100). Cover every label (LABELED) or every key structure (UNLABELED).`;
 
   const dataUrl = toDataUrl(imagePath);
-  const completion = await groq.chat.completions.create({
-    model: VISION_MODEL,
-    temperature: 0.2,
-    max_tokens: 1500,
-    messages: [{
-      role: 'user',
-      content: [
-        { type: 'image_url', image_url: { url: dataUrl } },
-        { type: 'text', text: prompt },
-      ],
-    }],
-  } as any);
+  const completion: any = await runWithModelFallback(
+    VISION_MODELS,
+    model => groq.chat.completions.create({
+      model,
+      temperature: 0.2,
+      max_completion_tokens: 900,
+      ...reasoningOptions(model),
+      messages: [{
+        role: 'user',
+        content: [
+          { type: 'image_url', image_url: { url: dataUrl } },
+          { type: 'text', text: prompt },
+        ],
+      }],
+    } as any),
+    'vision',
+    logFallback
+  );
 
   const raw = completion.choices[0]?.message?.content ?? '';
   try {
@@ -277,13 +313,16 @@ export async function regenerateCard(
   back: string,
   context: string
 ): Promise<{ front: string; back: string }> {
-  const completion = await groq.chat.completions.create({
-    model: MODEL,
-    temperature: 0.5,
-    max_tokens: 512,
-    messages: [{
-      role: 'user',
-      content: `Improve this Anki flashcard. Keep it concise, test one idea only.
+  const completion: any = await runWithModelFallback(
+    TEXT_MODELS,
+    model => groq.chat.completions.create({
+      model,
+      temperature: 0.5,
+      max_completion_tokens: 384,
+      ...reasoningOptions(model),
+      messages: [{
+        role: 'user',
+        content: `Improve this Anki flashcard. Keep it concise, test one idea only.
 
 Context: ${context}
 
@@ -292,8 +331,11 @@ Front: ${front}
 Back: ${back}
 
 Return a JSON object only (no markdown): { "front": "...", "back": "..." }`,
-    }],
-  });
+      }],
+    } as any),
+    'text-generation',
+    logFallback
+  );
 
   const raw = completion.choices[0]?.message?.content ?? '{}';
   try {

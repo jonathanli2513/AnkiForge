@@ -8,7 +8,9 @@ AnkiForge processes PDFs, images, Word documents, and text files, then uses larg
 
 ## Features
 
-- **Smart card generation** — GPT-OSS 120B synthesises facts into dense, multi-blank cloze cards; no trivial or duplicate cards
+- **Free multi-model generation** — GPT-OSS 20B, Qwen 3.6 27B, and GPT-OSS 120B automatically take over when another model reaches its free limit
+- **Token-efficient cards** — compact prompts, low reasoning, and larger chunks preserve the daily free allowance
+- **Recoverable progress** — completed cards are saved after every page and remain available after a browser refresh or partial run
 - **Image occlusion** — anatomy diagrams are automatically detected; text labels are extracted with pixel-perfect bounding boxes (PyMuPDF) and turned into occlusion masks
 - **Vision fallback** — pages without embedded text (tables, charts, slides) are read by a multimodal LLM (Qwen 3.6 27B)
 - **Per-page extraction** — PyMuPDF extracts text page-by-page, preserving reading order
@@ -23,7 +25,7 @@ AnkiForge processes PDFs, images, Word documents, and text files, then uses larg
 |-------|-----------|
 | Frontend | React 19 · Vite 8 · Tailwind CSS 4 · TypeScript |
 | Backend | Node.js · Express · TypeScript · ts-node |
-| AI | Groq SDK — `openai/gpt-oss-120b` (text) · `qwen/qwen3.6-27b` (vision) |
+| AI | Groq SDK — free text fallback pool (`gpt-oss-20b` → `qwen3.6-27b` → `gpt-oss-120b`) · Qwen vision |
 | PDF processing | PyMuPDF (`fitz`) via Python subprocess |
 | Anki export | `anki-apkg-export` |
 
@@ -67,8 +69,8 @@ Open `server/.env` and fill in:
 
 ```
 GROQ_API_KEY=gsk_...   # your Groq API key
-GROQ_TEXT_MODEL=openai/gpt-oss-120b
-GROQ_VISION_MODEL=qwen/qwen3.6-27b
+GROQ_TEXT_MODELS=openai/gpt-oss-20b,qwen/qwen3.6-27b,openai/gpt-oss-120b
+GROQ_VISION_MODELS=qwen/qwen3.6-27b
 PORT=3001
 ```
 
@@ -126,13 +128,22 @@ AnkiForge/
 | Variable | Required | Description |
 |----------|----------|-------------|
 | `GROQ_API_KEY` | ✅ | Groq API key for LLM inference |
-| `GROQ_TEXT_MODEL` | ❌ | Text-generation model (default: `openai/gpt-oss-120b`) |
-| `GROQ_VISION_MODEL` | ❌ | Image-understanding model (default: `qwen/qwen3.6-27b`) |
+| `GROQ_TEXT_MODELS` | ❌ | Comma-separated fallback order (default: GPT-OSS 20B, Qwen 3.6 27B, GPT-OSS 120B) |
+| `GROQ_VISION_MODELS` | ❌ | Comma-separated image-model fallback order (default: Qwen 3.6 27B) |
+| `GROQ_TEXT_MODEL` | ❌ | Legacy single-model override; retained for compatibility |
+| `GROQ_VISION_MODEL` | ❌ | Legacy single-model override; retained for compatibility |
 | `PORT` | ❌ | Server port (default: `3001`) |
 
 ---
 
 ## Version History
+
+### v1.1.0 — Free multi-model generation
+- Added automatic free-model fallback when Groq returns a rate limit or model error
+- Reduced repeated prompt and reasoning tokens
+- Preserved cards after every completed chunk and page
+- Persisted current cards and job progress in the browser
+- Added clear partial-generation warnings instead of discarding completed work
 
 ### v1.0.1 — Groq model migration
 - Replaced retired Llama text and vision models with supported Groq models

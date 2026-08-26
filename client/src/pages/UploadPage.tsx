@@ -1,11 +1,11 @@
-import { useCallback, useState, useEffect } from 'react';
+import { useCallback, useState, useEffect, useRef } from 'react';
 import { useDropzone } from 'react-dropzone';
 import { useNavigate } from 'react-router-dom';
 import { Upload, FileText, Image, AlertCircle, CheckCircle, Loader2, X, Zap } from 'lucide-react';
 import clsx from 'clsx';
 import { uploadFiles, pollJob } from '../api';
 import { useStore } from '../store/useStore';
-import type { Flashcard } from '../types';
+import type { Flashcard, GenerationJob } from '../types';
 
 const ACCEPTED = {
   'application/pdf': ['.pdf'],
@@ -30,12 +30,86 @@ export default function UploadPage() {
   const [statusMsg, setStatusMsg] = useState('');
   const [error, setError] = useState('');
   const [apiKeyMissing, setApiKeyMissing] = useState(false);
+  const monitoringJobId = useRef<string | null>(null);
+
+  const monitorJob = useCallback(async (jobId: string) => {
+    if (monitoringJobId.current === jobId) return;
+    monitoringJobId.current = jobId;
+    setProcessing(true);
+    let consecutivePollFailures = 0;
+
+    try {
+      let done = false;
+      while (!done) {
+        await sleep(1500);
+
+        let job: GenerationJob;
+        try {
+          job = await pollJob(jobId);
+          consecutivePollFailures = 0;
+        } catch (pollError) {
+          consecutivePollFailures += 1;
+          if (consecutivePollFailures < 3) continue;
+          throw pollError;
+        }
+
+        setCurrentJob(job);
+        setProgress(job.progress);
+        setStatusMsg(job.message);
+
+        const cards = (job.cards ?? []) as Flashcard[];
+        if (cards.length > 0) setCards(cards);
+
+        if (job.status === 'complete') {
+          done = true;
+          if (cards.length === 0) {
+            setError('Processing completed but no flashcards were generated. Check that the file contains readable text.');
+          } else {
+            navigate('/preview');
+          }
+        } else if (job.status === 'error') {
+          done = true;
+          setError(job.error ?? 'Processing failed');
+        }
+      }
+    } catch (err: any) {
+      const savedJob = useStore.getState().currentJob;
+      const recoveredCards = savedJob?.cards ?? [];
+      if (savedJob?.jobId === jobId && recoveredCards.length > 0) {
+        const recoveredJob: GenerationJob = {
+          ...savedJob,
+          status: 'complete',
+          partial: true,
+          warning: 'The processing connection ended, but all cards completed before that point were recovered.',
+          message: `Recovered ${recoveredCards.length} completed cards`,
+        };
+        setCurrentJob(recoveredJob);
+        setCards(recoveredCards);
+        navigate('/preview');
+      } else {
+        setError(err.message ?? 'Processing connection failed');
+      }
+    } finally {
+      if (monitoringJobId.current === jobId) monitoringJobId.current = null;
+      setProcessing(false);
+    }
+  }, [navigate, setCards, setCurrentJob]);
 
   useEffect(() => {
     fetch('/api/health').then(r => r.json()).then(d => {
       if (d.apiKeyConfigured === false) setApiKeyMissing(true);
     }).catch(() => {});
   }, []);
+
+  useEffect(() => {
+    const savedJob = useStore.getState().currentJob;
+    if (!savedJob || !['pending', 'extracting', 'detecting', 'generating'].includes(savedJob.status)) return;
+
+    setProgress(savedJob.progress);
+    setStatusMsg(savedJob.message || 'Resuming flashcard generation…');
+    if (savedJob.cards?.length) setCards(savedJob.cards);
+    void monitorJob(savedJob.jobId);
+  }, [monitorJob, setCards]);
 
   const onDrop = useCallback((accepted: File[]) => {
     setFiles(prev => {
@@ -64,34 +138,18 @@ export default function UploadPage() {
     setError('');
 
     try {
-      const { jobId } = await uploadFiles(files.map(e => e.file));
-
-      // Poll job
-      let done = false;
-      while (!done) {
-        await sleep(1500);
-        const job = await pollJob(jobId);
-        setCurrentJob(job);
-        setProgress(job.progress);
-        setStatusMsg(job.message);
-
-        if (job.status === 'complete') {
-          done = true;
-          const cards = (job.cards ?? []) as Flashcard[];
-          if (cards.length === 0) {
-            setError('Processing completed but no flashcards were generated. Check that the file contains readable text.');
-          } else {
-            setCards(cards);
-            navigate('/preview');
-          }
-        } else if (job.status === 'error') {
-          done = true;
-          setError(job.error ?? 'Processing failed');
-        }
-      }
+      const result = await uploadFiles(files.map(e => e.file));
+      setCurrentJob({
+        jobId: result.jobId,
+        status: 'pending',
+        progress: 0,
+        message: 'Upload complete · preparing your notes',
+        files: result.files,
+        cards: [],
+      });
+      await monitorJob(result.jobId);
     } catch (err: any) {
       setError(err.message ?? 'Upload failed');
-    } finally {
       setProcessing(false);
     }
   };
@@ -251,7 +309,7 @@ export default function UploadPage() {
       <div className="mt-10 grid grid-cols-3 gap-4">
         {[
           { icon: '📄', title: 'PDF & OCR', desc: 'Extracts text from typed PDFs, images & scanned documents' },
-          { icon: '🤖', title: 'AI-Powered', desc: 'Claude generates high-quality basic and cloze flashcards' },
+          { icon: '🤖', title: 'AI-Powered', desc: 'Free AI model fallbacks generate efficient basic and cloze cards' },
           { icon: '📦', title: 'Anki Export', desc: 'Export as TSV or APKG for direct Anki import' },
         ].map(({ icon, title, desc }) => (
           <div key={title} className="bg-white border border-slate-200 rounded-xl p-4 text-center">

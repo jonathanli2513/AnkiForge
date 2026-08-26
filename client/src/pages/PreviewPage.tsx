@@ -2,7 +2,7 @@ import { useState, useRef } from 'react';
 import { useNavigate } from 'react-router-dom';
 import {
   Search, Plus, Download, ChevronRight,
-  Trash2, Copy, RefreshCw, Check, Edit3, X, Tag, FileText, Layers, ImagePlus, Loader2
+  Trash2, Copy, RefreshCw, Check, Edit3, X, Tag, FileText, Layers, ImagePlus, Loader2, AlertTriangle
 } from 'lucide-react';
 import clsx from 'clsx';
 import { useStore } from '../store/useStore';
@@ -24,7 +24,7 @@ export default function PreviewPage() {
     filteredCards, cards, updateCard, deleteCard, duplicateCard,
     addCard, toggleApproved, toggleAllApproved,
     filterType, setFilterType, filterFile, setFilterFile,
-    searchQuery, setSearchQuery, uniqueFiles,
+    searchQuery, setSearchQuery, uniqueFiles, currentJob,
   } = useStore();
 
   const [selectedId, setSelectedId] = useState<string | null>(null);
@@ -144,6 +144,16 @@ export default function PreviewPage() {
       />
 
       <div className="flex flex-col h-full">
+        {currentJob?.partial && currentJob.warning && (
+          <div className="mb-4 flex items-start gap-2 rounded-xl border border-amber-300 bg-amber-50 px-4 py-3 text-sm text-amber-800">
+            <AlertTriangle size={17} className="mt-0.5 shrink-0 text-amber-600" />
+            <div>
+              <p className="font-semibold">Completed cards were preserved</p>
+              <p className="mt-0.5 text-amber-700">{currentJob.warning}</p>
+            </div>
+          </div>
+        )}
+
         {/* Toolbar */}
         <div className="flex flex-wrap items-center gap-3 mb-4">
           <div className="relative flex-1 min-w-48">

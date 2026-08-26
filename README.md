@@ -8,9 +8,9 @@ AnkiForge processes PDFs, images, Word documents, and text files, then uses larg
 
 ## Features
 
-- **Smart card generation** — llama-3.3-70b synthesises facts into dense, multi-blank cloze cards; no trivial or duplicate cards
+- **Smart card generation** — GPT-OSS 120B synthesises facts into dense, multi-blank cloze cards; no trivial or duplicate cards
 - **Image occlusion** — anatomy diagrams are automatically detected; text labels are extracted with pixel-perfect bounding boxes (PyMuPDF) and turned into occlusion masks
-- **Vision fallback** — pages without embedded text (tables, charts, slides) are read by a multimodal LLM (llama-4-scout)
+- **Vision fallback** — pages without embedded text (tables, charts, slides) are read by a multimodal LLM (Qwen 3.6 27B)
 - **Per-page extraction** — PyMuPDF extracts text page-by-page, preserving reading order
 - **Preview & Edit** — review every card before export; edit, regenerate, duplicate, or delete
 - **Anki export** — downloads a `.apkg` deck ready to import into Anki
@@ -23,7 +23,7 @@ AnkiForge processes PDFs, images, Word documents, and text files, then uses larg
 |-------|-----------|
 | Frontend | React 19 · Vite 8 · Tailwind CSS 4 · TypeScript |
 | Backend | Node.js · Express · TypeScript · ts-node |
-| AI | Groq SDK — `llama-3.3-70b-versatile` (text) · `llama-4-scout-17b` (vision) |
+| AI | Groq SDK — `openai/gpt-oss-120b` (text) · `qwen/qwen3.6-27b` (vision) |
 | PDF processing | PyMuPDF (`fitz`) via Python subprocess |
 | Anki export | `anki-apkg-export` |
 
@@ -67,6 +67,8 @@ Open `server/.env` and fill in:
 
 ```
 GROQ_API_KEY=gsk_...   # your Groq API key
+GROQ_TEXT_MODEL=openai/gpt-oss-120b
+GROQ_VISION_MODEL=qwen/qwen3.6-27b
 PORT=3001
 ```
 
@@ -124,11 +126,17 @@ AnkiForge/
 | Variable | Required | Description |
 |----------|----------|-------------|
 | `GROQ_API_KEY` | ✅ | Groq API key for LLM inference |
+| `GROQ_TEXT_MODEL` | ❌ | Text-generation model (default: `openai/gpt-oss-120b`) |
+| `GROQ_VISION_MODEL` | ❌ | Image-understanding model (default: `qwen/qwen3.6-27b`) |
 | `PORT` | ❌ | Server port (default: `3001`) |
 
 ---
 
 ## Version History
+
+### v1.0.1 — Groq model migration
+- Replaced retired Llama text and vision models with supported Groq models
+- Added optional environment overrides for future model changes
 
 ### v1.0.0 — Initial release
 - PDF, image, DOCX, and text file support

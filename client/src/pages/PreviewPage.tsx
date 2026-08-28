@@ -1,4 +1,4 @@
-import { useState, useRef } from 'react';
+import { useEffect, useState, useRef } from 'react';
 import { useNavigate } from 'react-router-dom';
 import {
   Search, Plus, Download, ChevronRight,
@@ -25,9 +25,9 @@ export default function PreviewPage() {
     addCard, toggleApproved, toggleAllApproved,
     filterType, setFilterType, filterFile, setFilterFile,
     searchQuery, setSearchQuery, uniqueFiles, currentJob,
+    selectedCardId: selectedId, setSelectedCardId: setSelectedId,
   } = useStore();
 
-  const [selectedId, setSelectedId] = useState<string | null>(null);
   const [editingId, setEditingId] = useState<string | null>(null);
   const [editDraft, setEditDraft] = useState<Partial<Flashcard>>({});
   const [regenerating, setRegenerating] = useState<string | null>(null);
@@ -36,12 +36,27 @@ export default function PreviewPage() {
   const [occlusionCardId, setOcclusionCardId] = useState<string | null>(null);
   const [uploadingImage, setUploadingImage] = useState(false);
   const imageInputRef = useRef<HTMLInputElement>(null);
+  const selectedListItemRef = useRef<HTMLLIElement>(null);
 
   const visible = filteredCards();
   const allFiles = uniqueFiles();
   const approvedCount = cards.filter(c => c.approvedForExport).length;
   const selectedCard = selectedId ? cards.find(c => c.id === selectedId) : null;
   const occlusionCard = occlusionCardId ? cards.find(c => c.id === occlusionCardId) : null;
+
+  useEffect(() => {
+    selectedListItemRef.current?.scrollIntoView({ block: 'nearest' });
+  }, [selectedId, filterType, filterFile, searchQuery]);
+
+  useEffect(() => {
+    const restoreSelectedCard = () => {
+      if (document.visibilityState === 'visible') {
+        selectedListItemRef.current?.scrollIntoView({ block: 'nearest' });
+      }
+    };
+    document.addEventListener('visibilitychange', restoreSelectedCard);
+    return () => document.removeEventListener('visibilitychange', restoreSelectedCard);
+  }, [selectedId]);
 
   function startEdit(card: Flashcard) {
     setEditingId(card.id);
@@ -91,8 +106,8 @@ export default function PreviewPage() {
           setOcclusionCardId(newest.id);
         }
       }, 50);
-    } catch (e: any) {
-      alert('Image upload failed: ' + e.message);
+    } catch (error: unknown) {
+      alert('Image upload failed: ' + (error instanceof Error ? error.message : 'Unknown error'));
     } finally {
       setUploadingImage(false);
     }
@@ -216,7 +231,8 @@ export default function PreviewPage() {
             ) : (
               <ul className="divide-y divide-slate-100">
                 {visible.map(card => (
-                  <li key={card.id} onClick={() => setSelectedId(card.id)}
+                  <li key={card.id} ref={selectedId === card.id ? selectedListItemRef : undefined}
+                    onClick={() => setSelectedId(card.id)}
                     className={clsx('px-3 py-3 cursor-pointer hover:bg-slate-50 transition-colors',
                       selectedId === card.id && 'bg-indigo-50 border-l-2 border-indigo-500')}>
                     <div className="flex items-start gap-2">

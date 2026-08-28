@@ -31,6 +31,8 @@ Rules:
 3. Prefer mechanisms, relationships, comparisons, and consequences over trivial naming.
 4. Use multi-blank cloze cards for related facts: {{c1::...}}, {{c2::...}}.
 5. For tables, make one cloze card per meaningful row and combine its columns.
+6. Return [] for title/cover pages and table-of-contents/navigation pages.
+7. Never test a page title, section heading, logo, watermark, copyright notice, page number, header, footer, or institution/course branding.
 
 Card types:
 - "basic": concise question and answer
@@ -189,7 +191,7 @@ export async function generateCardsFromImage(
   source: CardSource,
   extraTags: string[] = []
 ): Promise<Flashcard[]> {
-  const imageSystemPrompt = `You are an expert Anki flashcard creator for medical and university students. Analyze this image and generate NON-REDUNDANT flashcards with high information density. Rules: (1) For tables (origin/insertion/action): one multi-blank cloze card per row testing all columns together. (2) For diagrams: one card per labeled structure covering its role/attachments/function — not just its name. (3) Never make two cards that test the same fact. (4) Use cloze with multiple blanks ({{c1::...}}, {{c2::...}}) to pack related facts into one card. Return ONLY a valid JSON array.`;
+  const imageSystemPrompt = `You are an expert Anki flashcard creator for medical and university students. Analyze this image and generate NON-REDUNDANT flashcards with high information density. Rules: (1) Return [] if the image is a title/cover page or table-of-contents/navigation page. (2) Ignore titles, headings, logos, watermarks, copyright text, page numbers, headers, footers, and institution/course branding; never make cards that test them. (3) For tables (origin/insertion/action): one multi-blank cloze card per row testing all columns together. (4) For diagrams: one card per labeled structure covering its role/attachments/function — not just its name. (5) Never make two cards that test the same fact. (6) Use cloze with multiple blanks ({{c1::...}}, {{c2::...}}) to pack related facts into one card. Return ONLY a valid JSON array.`;
 
   const imageUserPrompt = `Generate efficient, non-redundant Anki flashcards from this image. For anatomy tables: one cloze card per row with all columns as separate blanks. For diagrams: cards that test function and relationships, not just naming. Return a JSON array only:
 [{ "cardType": "basic", "front": "question or cloze with [...] blanks", "back": "answer", "clozeText": "sentence with {{c1::hidden}} blanks (cloze only)", "tags": ["Tag"], "confidenceScore": 0.9 }]`;
@@ -267,10 +269,15 @@ Step 2 — place masks:
   If LABELED: place each mask to cover the text label word/phrase only (not the structure). Tight boxes, typically width 3–15%, height 1–5%.
   If UNLABELED: place masks over the anatomical structures themselves. Larger boxes are fine (width up to 35%, height up to 25%).
 
+Protected content — NEVER cover any of these:
+  page or slide titles, section headings, figure titles, logos, watermarks, copyright notices,
+  page numbers, headers, footers, or institution/course/company branding. Keep them fully visible.
+  If the image is a title/cover page or table-of-contents/navigation page, return [].
+
 Return ONLY a valid JSON array, no prose, no markdown fences. Each element:
 {"label": "name of what is hidden", "x": 12, "y": 45, "width": 10, "height": 3}
 
-All numbers are percentages of image dimensions (0–100). Cover every label (LABELED) or every key structure (UNLABELED).`;
+All numbers are percentages of image dimensions (0–100). Cover every study-relevant label (LABELED) or key structure (UNLABELED), subject to the protected-content rules above.`;
 
   const dataUrl = toDataUrl(imagePath);
   const completion: any = await runWithModelFallback(

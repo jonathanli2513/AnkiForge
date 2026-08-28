@@ -63,7 +63,7 @@ export default function UploadPage() {
         if (job.status === 'complete') {
           done = true;
           if (cards.length === 0) {
-            setError('Processing completed but no flashcards were generated. Check that the file contains readable text.');
+            setError(job.message || 'Processing completed but no flashcards were generated. Check that the file contains readable text.');
           } else {
             navigate('/preview');
           }
@@ -72,7 +72,7 @@ export default function UploadPage() {
           setError(job.error ?? 'Processing failed');
         }
       }
-    } catch (err: any) {
+    } catch (err: unknown) {
       const savedJob = useStore.getState().currentJob;
       const recoveredCards = savedJob?.cards ?? [];
       if (savedJob?.jobId === jobId && recoveredCards.length > 0) {
@@ -87,7 +87,7 @@ export default function UploadPage() {
         setCards(recoveredCards);
         navigate('/preview');
       } else {
-        setError(err.message ?? 'Processing connection failed');
+        setError(err instanceof Error ? err.message : 'Processing connection failed');
       }
     } finally {
       if (monitoringJobId.current === jobId) monitoringJobId.current = null;
@@ -148,8 +148,8 @@ export default function UploadPage() {
         cards: [],
       });
       await monitorJob(result.jobId);
-    } catch (err: any) {
-      setError(err.message ?? 'Upload failed');
+    } catch (err: unknown) {
+      setError(err instanceof Error ? err.message : 'Upload failed');
       setProcessing(false);
     }
   };

@@ -118,10 +118,29 @@ export default function OcclusionEditorModal({ imageUrl, masks, onChange, onClos
     setDrag({ kind: 'resizing', maskId, handle });
   };
 
-  const deleteMask = (id: string) => {
+  const deleteMask = useCallback((id: string) => {
     onChange(masks.filter(m => m.id !== id));
     if (selectedId === id) setSelectedId(null);
-  };
+  }, [masks, onChange, selectedId]);
+
+  useEffect(() => {
+    const handleKeyDown = (event: KeyboardEvent) => {
+      if (preview || !selectedId || (event.key !== 'Delete' && event.key !== 'Backspace')) return;
+
+      const target = event.target;
+      const isTyping = target instanceof HTMLInputElement ||
+        target instanceof HTMLTextAreaElement ||
+        target instanceof HTMLSelectElement ||
+        target instanceof HTMLElement && target.isContentEditable;
+      if (isTyping) return;
+
+      event.preventDefault();
+      deleteMask(selectedId);
+    };
+
+    window.addEventListener('keydown', handleKeyDown);
+    return () => window.removeEventListener('keydown', handleKeyDown);
+  }, [deleteMask, preview, selectedId]);
 
   const updateAnswer = (id: string, answer: string) => {
     onChange(masks.map(m => m.id === id ? { ...m, answer } : m));
@@ -148,8 +167,8 @@ export default function OcclusionEditorModal({ imageUrl, masks, onChange, onClos
       } else {
         onChange([...masks, ...detected]);
       }
-    } catch (err: any) {
-      setAutoError(err.message ?? 'Auto-detect failed');
+    } catch (err: unknown) {
+      setAutoError(err instanceof Error ? err.message : 'Auto-detect failed');
     } finally {
       setAutoDetecting(false);
     }
@@ -284,6 +303,7 @@ export default function OcclusionEditorModal({ imageUrl, masks, onChange, onClos
                         <span className="text-xs font-semibold text-indigo-600 bg-indigo-100 px-1.5 py-0.5 rounded">#{i + 1}</span>
                         <span className="text-xs text-slate-400 flex-1">{Math.round(mask.width)}×{Math.round(mask.height)}px</span>
                         <button onClick={e => { e.stopPropagation(); deleteMask(mask.id); }}
+                          aria-label={`Delete mask ${i + 1}`}
                           className="text-slate-300 hover:text-red-500 transition-colors">
                           <Trash2 size={13} />
                         </button>
@@ -322,7 +342,7 @@ export default function OcclusionEditorModal({ imageUrl, masks, onChange, onClos
         {/* Status bar */}
         <div className="px-5 py-2 border-t border-slate-100 bg-slate-50 flex items-center gap-4 text-xs text-slate-400 shrink-0">
           <span className="flex items-center gap-1"><Move size={11} /> Drag to draw new mask</span>
-          <span>· Click existing mask to select · Drag corners to resize</span>
+          <span>· Click existing mask to select · Delete/Backspace to remove · Drag corners to resize</span>
           <span className="ml-auto">{naturalW} × {naturalH} px</span>
         </div>
       </div>

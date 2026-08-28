@@ -8,7 +8,7 @@ const execFileAsync = promisify(execFile);
 
 // Python script: extract per-page text from PDF using PyMuPDF (preserves reading order)
 const PDF_EXTRACT_SCRIPT = `
-import sys, json, fitz
+import sys, json, fitz, statistics
 doc = fitz.open(sys.argv[1])
 result = []
 for i, page in enumerate(doc):
@@ -19,7 +19,30 @@ for i, page in enumerate(doc):
         if len(l) < 80 and l == l.upper() and len(l) > 3 and not l.replace(' ', '').isdigit():
             section = l
             break
-    result.append({'pageNumber': i + 1, 'text': text.strip(), 'sectionTitle': section})
+    spans = []
+    for block in page.get_text('dict').get('blocks', []):
+        if block.get('type') != 0:
+            continue
+        for line in block.get('lines', []):
+            for span in line.get('spans', []):
+                if span.get('text', '').strip():
+                    spans.append(span)
+    sizes = [float(span.get('size', 0)) for span in spans if float(span.get('size', 0)) > 0]
+    max_size = max(sizes) if sizes else 0
+    median_size = statistics.median(sizes) if sizes else 0
+    largest_spans = [span for span in spans if abs(float(span.get('size', 0)) - max_size) < 0.01]
+    largest_y = min((span.get('bbox', [0, 0, 0, 0])[1] for span in largest_spans), default=0)
+    page_height = max(float(page.rect.height), 1)
+    result.append({
+        'pageNumber': i + 1,
+        'text': text.strip(),
+        'sectionTitle': section,
+        'layout': {
+            'maxFontSize': round(max_size, 2),
+            'medianFontSize': round(median_size, 2),
+            'largestTextYPercent': round(largest_y / page_height * 100, 2)
+        }
+    })
 print(json.dumps(result))
 `;
 
@@ -29,7 +52,12 @@ async function extractPdfText(filePath: string): Promise<ProcessedFile> {
 
   try {
     const { stdout } = await execFileAsync('python3', [scriptPath, filePath], { timeout: 60000 });
-    const rawPages = JSON.parse(stdout) as Array<{ pageNumber: number; text: string; sectionTitle: string | null }>;
+    const rawPages = JSON.parse(stdout) as Array<{
+      pageNumber: number;
+      text: string;
+      sectionTitle: string | null;
+      layout?: ProcessedPage['layout'];
+    }>;
 
     const pages: ProcessedPage[] = rawPages.map(p => ({
       pageNumber: p.pageNumber,
@@ -37,6 +65,7 @@ async function extractPdfText(filePath: string): Promise<ProcessedFile> {
       hasImages: false,
       imagePaths: [],
       sectionTitle: p.sectionTitle ?? undefined,
+      layout: p.layout,
     }));
 
     if (pages.length === 0) {

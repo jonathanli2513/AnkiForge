@@ -9,6 +9,7 @@ import { generateCardsForPage, generateCardsFromImage, detectOcclusionRegions } 
 import { renderPdfPage, extractPageLabels, getImageDimensions } from '../services/pdfRenderer';
 import type { Flashcard, OcclusionMask } from '../types/index';
 import { isModelPoolExhausted } from '../services/modelPool';
+import { classifyExcludedPage, findRepeatedPageLines } from '../services/contentFilters';
 
 const UPLOADS_DIR = path.join(__dirname, '../../uploads');
 
@@ -121,6 +122,7 @@ async function processFiles(jobId: string, files: Express.Multer.File[]) {
   const allCards: Flashcard[] = [];
   const generationErrors: string[] = [];
   const totalFiles = files.length;
+  let skippedPages = 0;
   let stoppedEarly = false;
   let stopReason = '';
 
@@ -153,9 +155,15 @@ async function processFiles(jobId: string, files: Express.Multer.File[]) {
     }
 
     const totalPages = processed.pages.length;
+    const excludedPageReasons = processed.pages.map((page, pageIndex) =>
+      classifyExcludedPage(page, pageIndex, totalPages)
+    );
+    const repeatedPageLines = isPdf
+      ? findRepeatedPageLines(processed.pages.map(page => page.text))
+      : new Set<string>();
 
     // For image files: run occlusion detection on the uploaded image directly
-    if (isImage) {
+    if (isImage && !excludedPageReasons[0]) {
       jobStore.update(jobId, {
         status: 'detecting',
         progress: baseProgress + 5,
@@ -185,6 +193,16 @@ async function processFiles(jobId: string, files: Express.Multer.File[]) {
         message: `Generating cards: ${file.originalname} page ${pi + 1}/${totalPages}`,
       });
 
+      const excludedReason = excludedPageReasons[pi];
+      if (excludedReason) {
+        skippedPages += 1;
+        jobStore.update(jobId, {
+          cards: [...allCards],
+          message: `Skipped ${excludedReason}: ${file.originalname} page ${pi + 1}/${totalPages}`,
+        });
+        continue;
+      }
+
       const textLen = page.text.trim().length;
       const isImageHeavyPage = isPdf && textLen < LOW_TEXT_THRESHOLD;
 
@@ -203,7 +221,7 @@ async function processFiles(jobId: string, files: Express.Multer.File[]) {
           });
 
           // Step 1: try to extract text label positions directly from PDF (exact, no vision needed)
-          const pdfLabels = await extractPageLabels(file.path, pi);
+          const pdfLabels = await extractPageLabels(file.path, pi, repeatedPageLines);
 
           if (pdfLabels.length > 0) {
             // Use PyMuPDF's exact label coordinates — covers the actual text on the diagram
@@ -323,7 +341,9 @@ async function processFiles(jobId: string, files: Express.Multer.File[]) {
     progress: 100,
     message: stoppedEarly
       ? `Saved ${allCards.length} cards before the free daily limits were reached`
-      : `Generated ${allCards.length} flashcard${allCards.length !== 1 ? 's' : ''}`,
+      : allCards.length === 0 && skippedPages > 0
+        ? `No flashcards generated; skipped ${skippedPages} title/contents page${skippedPages !== 1 ? 's' : ''}`
+        : `Generated ${allCards.length} flashcard${allCards.length !== 1 ? 's' : ''}${skippedPages > 0 ? ` · skipped ${skippedPages} title/contents page${skippedPages !== 1 ? 's' : ''}` : ''}`,
     cards: allCards,
     partial: stoppedEarly || generationErrors.length > 0,
     warning: stoppedEarly

@@ -17,6 +17,10 @@ interface AppState {
   toggleApproved: (id: string) => void;
   toggleAllApproved: (approved: boolean) => void;
 
+  // Preview position
+  selectedCardId: string | null;
+  setSelectedCardId: (id: string | null) => void;
+
   // Filters
   filterType: string;
   setFilterType: (t: string) => void;
@@ -39,13 +43,21 @@ export const useStore = create<AppState>()(persist((set, get) => ({
   setCurrentJob: (job) => set({ currentJob: job }),
 
   cards: [],
-  setCards: (cards) => set({ cards }),
+  setCards: (cards) => set(s => ({
+    cards,
+    selectedCardId: s.selectedCardId && cards.some(card => card.id === s.selectedCardId)
+      ? s.selectedCardId
+      : null,
+  })),
   updateCard: (id, patch) =>
     set(s => ({
       cards: s.cards.map(c => c.id === id ? { ...c, ...patch, updatedAt: new Date().toISOString() } : c),
     })),
   deleteCard: (id) =>
-    set(s => ({ cards: s.cards.filter(c => c.id !== id) })),
+    set(s => ({
+      cards: s.cards.filter(c => c.id !== id),
+      selectedCardId: s.selectedCardId === id ? null : s.selectedCardId,
+    })),
   addCard: (partial) => {
     const now = new Date().toISOString();
     const card: Flashcard = {
@@ -77,6 +89,9 @@ export const useStore = create<AppState>()(persist((set, get) => ({
     })),
   toggleAllApproved: (approved) =>
     set(s => ({ cards: s.cards.map(c => ({ ...c, approvedForExport: approved })) })),
+
+  selectedCardId: null,
+  setSelectedCardId: (selectedCardId) => set({ selectedCardId }),
 
   filterType: 'all',
   setFilterType: (filterType) => set({ filterType }),
@@ -112,6 +127,7 @@ export const useStore = create<AppState>()(persist((set, get) => ({
     currentJob: state.currentJob,
     cards: state.cards,
     deckName: state.deckName,
+    selectedCardId: state.selectedCardId,
   }),
 }));
 

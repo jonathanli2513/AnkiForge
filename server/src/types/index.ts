@@ -37,6 +37,11 @@ export interface ProcessedPage {
   hasImages: boolean;
   imagePaths: string[];
   sectionTitle?: string;
+  layout?: {
+    maxFontSize: number;
+    medianFontSize: number;
+    largestTextYPercent: number;
+  };
 }
 
 export interface ProcessedFile {

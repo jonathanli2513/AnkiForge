@@ -10,6 +10,7 @@ import { renderPdfPage, extractPageLabels, getImageDimensions } from '../service
 import type { Flashcard, OcclusionMask } from '../types/index';
 import { isModelPoolExhausted } from '../services/modelPool';
 import { classifyExcludedPage, findRepeatedPageLines } from '../services/contentFilters';
+import { releasePdfJsDocument } from '../services/pdfJsFallback';
 
 const UPLOADS_DIR = path.join(__dirname, '../../uploads');
 
@@ -319,6 +320,9 @@ async function processFiles(jobId: string, files: Express.Multer.File[]) {
       if (stoppedEarly) break;
     }
 
+    // Release the bundled PDF.js fallback before removing the uploaded PDF.
+    if (isPdf) await releasePdfJsDocument(file.path);
+
     // Keep PDFs only while page rendering needs them, then remove the upload.
     fs.unlink(file.path, () => {});
     if (stoppedEarly) break;
@@ -340,7 +344,7 @@ async function processFiles(jobId: string, files: Express.Multer.File[]) {
     status: 'complete',
     progress: 100,
     message: stoppedEarly
-      ? `Saved ${allCards.length} cards before the free daily limits were reached`
+      ? `Saved ${allCards.length} cards; generation paused after every configured free model was unavailable`
       : allCards.length === 0 && skippedPages > 0
         ? `No flashcards generated; skipped ${skippedPages} title/contents page${skippedPages !== 1 ? 's' : ''}`
         : `Generated ${allCards.length} flashcard${allCards.length !== 1 ? 's' : ''}${skippedPages > 0 ? ` · skipped ${skippedPages} title/contents page${skippedPages !== 1 ? 's' : ''}` : ''}`,

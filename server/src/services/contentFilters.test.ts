@@ -24,6 +24,10 @@ test('classifies explicit and implicit table-of-contents pages', () => {
     'table of contents'
   );
   assert.equal(
+    classifyExcludedPage(page('Table of Content\nAnatomical Terminology\nOsteology\nMusculature'), 2, 353),
+    'table of contents'
+  );
+  assert.equal(
     classifyExcludedPage(page('Introduction 2\nMethods 5\nResults 9\nDiscussion 12\nReferences 18'), 1, 8),
     'table of contents'
   );

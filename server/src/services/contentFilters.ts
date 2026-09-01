@@ -40,7 +40,7 @@ export function classifyExcludedPage(
   const openingLines = normalizedLines.slice(0, 5);
 
   const hasContentsHeading = openingLines.some(line =>
-    /^(?:table of contents|contents)(?: page)?$/.test(line)
+    /^(?:table of contents?|contents?)(?: page)?$/.test(line)
   );
   const navigationLines = lines.filter(line =>
     /\.{2,}\s*\d{1,4}\s*$/.test(line) ||

@@ -4,10 +4,19 @@ import fs from 'fs';
 import { promisify } from 'util';
 import { v4 as uuidv4 } from 'uuid';
 import { filterOcclusionLabels, type OcclusionLabelCandidate } from './contentFilters';
+import { extractPageLabelsWithPdfJs, renderPdfPageWithPdfJs } from './pdfJsFallback';
 
 const execFileAsync = promisify(execFile);
 
 const UPLOADS_DIR = path.join(__dirname, '../../uploads');
+const warnedFallbacks = new Set<string>();
+
+function warnFallbackOnce(kind: string, error: unknown) {
+  if (warnedFallbacks.has(kind)) return;
+  warnedFallbacks.add(kind);
+  const message = error instanceof Error ? error.message : String(error);
+  console.warn(`[AnkiForge] PyMuPDF ${kind} unavailable (${message}); using bundled PDF.js.`);
+}
 
 // Python script that renders a single PDF page to PNG via PyMuPDF and prints "width,height"
 const RENDER_SCRIPT = `
@@ -101,25 +110,36 @@ export async function renderPdfPage(pdfPath: string, pageIndex: number): Promise
   fs.writeFileSync(scriptPath, RENDER_SCRIPT.trim());
 
   try {
-    const { stdout } = await execFileAsync('python3', [scriptPath, pdfPath, String(pageIndex), outputPath], {
-      timeout: 30000,
-    });
-    const [w, h] = stdout.trim().split(',').map(Number);
-    return {
-      imagePath: outputPath,
-      imageUrl: `/uploads/${outputFile}`,
-      width: w,
-      height: h,
-    };
+    try {
+      const { stdout } = await execFileAsync('python3', [scriptPath, pdfPath, String(pageIndex), outputPath], {
+        timeout: 30000,
+      });
+      const [w, h] = stdout.trim().split(',').map(Number);
+      return {
+        imagePath: outputPath,
+        imageUrl: `/uploads/${outputFile}`,
+        width: w,
+        height: h,
+      };
+    } catch (error) {
+      warnFallbackOnce('page rendering', error);
+      const { width, height } = await renderPdfPageWithPdfJs(pdfPath, pageIndex, outputPath);
+      return {
+        imagePath: outputPath,
+        imageUrl: `/uploads/${outputFile}`,
+        width,
+        height,
+      };
+    }
   } finally {
     fs.unlink(scriptPath, () => {});
   }
 }
 
 /**
- * Extract text label bounding boxes from a PDF page using PyMuPDF's embedded text layer.
+ * Extract text label bounding boxes from a PDF page using the embedded text layer.
  * Returns grouped labels (words on the same line merged) with percentage coordinates.
- * Falls back to empty array if the page has no embedded text (purely raster images).
+ * Uses bundled PDF.js if PyMuPDF is unavailable; returns no labels for purely raster pages.
  */
 export async function extractPageLabels(
   pdfPath: string,
@@ -136,8 +156,15 @@ export async function extractPageLabels(
     return Array.isArray(parsed)
       ? filterOcclusionLabels(parsed as PageLabel[], repeatedPageLines)
       : [];
-  } catch {
-    return [];
+  } catch (error) {
+    warnFallbackOnce('label extraction', error);
+    try {
+      const parsed = await extractPageLabelsWithPdfJs(pdfPath, pageIndex);
+      return filterOcclusionLabels(parsed, repeatedPageLines);
+    } catch (fallbackError) {
+      const message = fallbackError instanceof Error ? fallbackError.message : String(fallbackError);
+      throw new Error(`Unable to locate PDF labels with PyMuPDF or PDF.js: ${message}`);
+    }
   } finally {
     fs.unlink(scriptPath, () => {});
   }

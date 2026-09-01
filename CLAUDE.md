@@ -34,7 +34,8 @@ npm run dev
 
 Requires:
 - Node.js ≥ 18
-- Python 3 with PyMuPDF: `pip3 install pymupdf`
+- Optional Python 3 with PyMuPDF for faster PDF processing: `pip3 install pymupdf`
+- Without PyMuPDF, the bundled PDF.js engine preserves per-page extraction, label coordinates, and rendering
 - A Groq API key (free at console.groq.com)
 
 ---
@@ -47,9 +48,9 @@ Requires:
 | Backend | Node.js, Express, TypeScript, ts-node |
 | State | Zustand |
 | Routing | React Router v7 |
-| AI — text cards | Groq SDK fallback pool: `openai/gpt-oss-20b`, `qwen/qwen3.6-27b`, `openai/gpt-oss-120b` |
-| AI — vision/occlusion | Groq SDK, `qwen/qwen3.6-27b` |
-| PDF processing | PyMuPDF (`fitz`) via Python subprocess |
+| AI — text cards | Free-plan Groq fallback pool: `openai/gpt-oss-20b`, `qwen/qwen3.6-27b`, `qwen/qwen3.8-27b`, `openai/gpt-oss-120b` |
+| AI — vision/occlusion | Free-plan Groq fallback pool: `qwen/qwen3.6-27b`, `qwen/qwen3.8-27b` |
+| PDF processing | PyMuPDF (`fitz`) when available; bundled PDF.js fallback |
 | Anki export | `anki-apkg-export` npm package |
 | File uploads | Multer |
 
@@ -83,7 +84,8 @@ AnkiForge/
 │   ├── services/
 │   │   ├── aiGenerator.ts        # Groq card generation (text + vision) and occlusion detection
 │   │   ├── extraction.ts         # PDF/image/DOCX/TXT text extraction
-│   │   └── pdfRenderer.ts        # PyMuPDF page rendering + word bounding box extraction
+│   │   ├── pdfRenderer.ts        # PyMuPDF page rendering + word bounding box extraction
+│   │   └── pdfJsFallback.ts      # Bundled per-page extraction, labels, and rendering
 │   ├── middleware/upload.ts       # Multer config
 │   ├── utils/jobStore.ts          # In-memory job status store
 │   └── types/index.ts             # Server-side types
@@ -102,14 +104,14 @@ AnkiForge/
 When a file is uploaded, a background job runs through these steps per page:
 
 ```
-extractFile()  →  per-page text via PyMuPDF (falls back to pdf-parse)
+extractFile()  →  per-page text via PyMuPDF (falls back to bundled PDF.js)
     │
     ├─ page text ≥ 1400 chars (text-heavy)?
     │     └─ generateCardsForPage()  →  chunked text → Groq → basic/cloze cards
     │
     └─ page text < 1400 chars (image-heavy / diagram / slide)?
           │
-          ├─ Step 1: extractPageLabels()  →  PyMuPDF word bounding boxes
+          ├─ Step 1: extractPageLabels()  →  PyMuPDF or PDF.js text bounding boxes
           │     found labels → renderPdfPage() → OcclusionMask[] → image_occlusion card
           │
           ├─ Step 2 (no labels): renderPdfPage() → detectOcclusionRegions() via vision LLM
@@ -125,8 +127,11 @@ After each file is fully processed, the original uploaded file is deleted. Rende
 
 ## Key design decisions
 
-**PyMuPDF for label extraction (not vision)**
-Vision models consistently placed masks over anatomical structures rather than their text labels. PyMuPDF's `get_text('words')` gives pixel-perfect bounding boxes for text already on the PDF. Words within 8pt vertically and 130pt horizontally are grouped into one label. Groups wider than 50% of the page or longer than 55 chars are filtered out (they're sentences, not labels).
+**Embedded PDF text for label extraction (not vision)**
+Vision models consistently placed masks over anatomical structures rather than their text labels. PyMuPDF is preferred when installed. If Python is missing, bundled PDF.js preserves page boundaries and produces text-label bounding boxes instead of collapsing the document through `pdf-parse`. Groups wider than 50% of the page or longer than 55 chars are filtered out (they're sentences, not labels).
+
+**Free-model fallback and rate-limit waits**
+The fallback pool advances on 429, transient model errors, and malformed/truncated JSON output. If every free model reports a short `retry-after`, the background job waits for the shortest reset and retries. Long resets are not waited out; completed cards remain saved. Do not add a paid-provider fallback.
 
 **LOW_TEXT_THRESHOLD = 1400**
 Pages below this character count get image-based processing. This covers anatomy slides (~700 chars of label text) and muscle origin/insertion tables (~1200 chars). Pages above get text-based card generation.

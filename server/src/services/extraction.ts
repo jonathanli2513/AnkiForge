@@ -3,6 +3,7 @@ import path from 'path';
 import { execFile } from 'child_process';
 import { promisify } from 'util';
 import { ProcessedFile, ProcessedPage } from '../types';
+import { extractPdfPagesWithPdfJs } from './pdfJsFallback';
 
 const execFileAsync = promisify(execFile);
 
@@ -73,20 +74,24 @@ async function extractPdfText(filePath: string): Promise<ProcessedFile> {
     }
 
     return { fileName: path.basename(filePath), fileType: 'pdf', pages, totalPages: pages.length };
-  } catch {
-    // Fallback: pdf-parse single-page extraction
-    const pdfParse = require('pdf-parse');
-    const buffer = fs.readFileSync(filePath);
-    const data = await pdfParse(buffer);
-    const rawPages = data.text.split(/\f/).filter((p: string) => p.trim().length > 0);
-    const pages: ProcessedPage[] = rawPages.length > 0
-      ? rawPages.map((text: string, idx: number) => {
-          const lines = text.split('\n').filter((l: string) => l.trim());
-          const sectionTitle = lines.find((l: string) => l.length < 80 && l === l.toUpperCase() && l.length > 3);
-          return { pageNumber: idx + 1, text: text.trim(), hasImages: false, imagePaths: [], sectionTitle };
-        })
-      : [{ pageNumber: 1, text: data.text.trim(), hasImages: false, imagePaths: [] }];
-    return { fileName: path.basename(filePath), fileType: 'pdf', pages, totalPages: pages.length };
+  } catch (pyMuPdfError: any) {
+    // PyMuPDF is optional in the local macOS app. Use bundled PDF.js so a
+    // missing Python module or a timeout cannot collapse every PDF page into
+    // one giant text block and silently disable image occlusion.
+    console.warn(
+      `[AnkiForge] PyMuPDF extraction unavailable (${pyMuPdfError?.message ?? 'unknown error'}); using bundled per-page PDF.js extraction.`
+    );
+    try {
+      const pages = await extractPdfPagesWithPdfJs(filePath);
+      if (pages.length === 0) {
+        throw new Error('PDF.js returned no pages');
+      }
+      return { fileName: path.basename(filePath), fileType: 'pdf', pages, totalPages: pages.length };
+    } catch (pdfJsError: any) {
+      throw new Error(
+        `Could not read this PDF page by page. PyMuPDF: ${pyMuPdfError?.message ?? 'failed'}. PDF.js: ${pdfJsError?.message ?? 'failed'}.`
+      );
+    }
   } finally {
     fs.unlink(scriptPath, () => {});
   }

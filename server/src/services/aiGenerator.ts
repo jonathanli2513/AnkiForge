@@ -9,12 +9,12 @@ const groq = new Groq({ apiKey: process.env.GROQ_API_KEY });
 const TEXT_MODELS = buildModelPool(
   process.env.GROQ_TEXT_MODELS,
   process.env.GROQ_TEXT_MODEL,
-  ['openai/gpt-oss-20b', 'qwen/qwen3.6-27b', 'openai/gpt-oss-120b']
+  ['openai/gpt-oss-20b', 'qwen/qwen3.6-27b', 'qwen/qwen3.8-27b', 'openai/gpt-oss-120b']
 );
 const VISION_MODELS = buildModelPool(
   process.env.GROQ_VISION_MODELS,
   process.env.GROQ_VISION_MODEL,
-  ['qwen/qwen3.6-27b']
+  ['qwen/qwen3.6-27b', 'qwen/qwen3.8-27b']
 );
 
 // Larger chunks repeat the instruction prompt less often and substantially reduce
@@ -65,6 +65,14 @@ function logFallback(fromModel: string, toModel: string) {
   console.warn(`[AnkiForge] ${fromModel} is unavailable; trying free fallback ${toModel}.`);
 }
 
+function logRateLimitWait(waitMs: number) {
+  console.warn(
+    `[AnkiForge] Every free model is temporarily rate-limited; waiting ${Math.ceil(waitMs / 1000)} seconds for the shortest reset before retrying.`
+  );
+}
+
+const FREE_FALLBACK_OPTIONS = { onWait: logRateLimitWait };
+
 function splitIntoChunks(text: string): string[] {
   if (text.length <= CHUNK_SIZE) return [text];
 
@@ -93,6 +101,21 @@ function sanitizeTag(tag: string): string {
   return tag.replace(/[^a-zA-Z0-9_\-]/g, '_').replace(/_+/g, '_').slice(0, 40);
 }
 
+function parseJsonArray(raw: string, label: string): any[] {
+  try {
+    const cleaned = raw.replace(/```json\n?/g, '').replace(/```\n?/g, '').trim();
+    const match = cleaned.match(/\[[\s\S]*\]/);
+    if (!match) throw new Error('no JSON array found');
+    const parsed = JSON.parse(match[0]);
+    if (!Array.isArray(parsed)) throw new Error('response was not an array');
+    return parsed;
+  } catch (cause: any) {
+    const error: any = new Error(`Invalid ${label} JSON: ${cause?.message ?? 'parse failed'}`);
+    error.code = 'invalid_model_output';
+    throw error;
+  }
+}
+
 async function generateCardsForChunk(
   chunk: string,
   chunkIndex: number,
@@ -100,32 +123,25 @@ async function generateCardsForChunk(
   source: CardSource,
   baseTags: string[]
 ): Promise<Flashcard[]> {
-  const completion: any = await runWithModelFallback(
+  const parsed: any[] = await runWithModelFallback(
     TEXT_MODELS,
-    model => groq.chat.completions.create({
-      model,
-      temperature: 0.3,
-      max_completion_tokens: TEXT_OUTPUT_TOKENS,
-      ...reasoningOptions(model),
-      messages: [
-        { role: 'system', content: SYSTEM_PROMPT },
-        { role: 'user', content: buildChunkPrompt(chunk, chunkIndex, totalChunks, source.fileName, source.pageNumber, source.sectionTitle) },
-      ],
-    } as any),
+    async model => {
+      const completion: any = await groq.chat.completions.create({
+        model,
+        temperature: 0.3,
+        max_completion_tokens: TEXT_OUTPUT_TOKENS,
+        ...reasoningOptions(model),
+        messages: [
+          { role: 'system', content: SYSTEM_PROMPT },
+          { role: 'user', content: buildChunkPrompt(chunk, chunkIndex, totalChunks, source.fileName, source.pageNumber, source.sectionTitle) },
+        ],
+      } as any);
+      return parseJsonArray(completion.choices[0]?.message?.content ?? '', 'flashcard');
+    },
     'text-generation',
-    logFallback
+    logFallback,
+    FREE_FALLBACK_OPTIONS
   );
-
-  const raw = completion.choices[0]?.message?.content ?? '';
-  let parsed: any[] = [];
-  try {
-    const cleaned = raw.replace(/```json\n?/g, '').replace(/```\n?/g, '').trim();
-    const match = cleaned.match(/\[[\s\S]*\]/);
-    parsed = match ? JSON.parse(match[0]) : [];
-    if (!Array.isArray(parsed)) parsed = [];
-  } catch {
-    return [];
-  }
 
   const now = new Date().toISOString();
   return parsed
@@ -197,38 +213,31 @@ export async function generateCardsFromImage(
 [{ "cardType": "basic", "front": "question or cloze with [...] blanks", "back": "answer", "clozeText": "sentence with {{c1::hidden}} blanks (cloze only)", "tags": ["Tag"], "confidenceScore": 0.9 }]`;
 
   const dataUrl = toDataUrl(imagePath);
-  const completion: any = await runWithModelFallback(
+  const parsed: any[] = await runWithModelFallback(
     VISION_MODELS,
-    model => groq.chat.completions.create({
-      model,
-      temperature: 0.3,
-      max_completion_tokens: 1800,
-      ...reasoningOptions(model),
-      messages: [
-        { role: 'system', content: imageSystemPrompt },
-        {
-          role: 'user',
-          content: [
-            { type: 'image_url', image_url: { url: dataUrl } },
-            { type: 'text', text: imageUserPrompt },
-          ],
-        },
-      ],
-    } as any),
+    async model => {
+      const completion: any = await groq.chat.completions.create({
+        model,
+        temperature: 0.3,
+        max_completion_tokens: 1800,
+        ...reasoningOptions(model),
+        messages: [
+          { role: 'system', content: imageSystemPrompt },
+          {
+            role: 'user',
+            content: [
+              { type: 'image_url', image_url: { url: dataUrl } },
+              { type: 'text', text: imageUserPrompt },
+            ],
+          },
+        ],
+      } as any);
+      return parseJsonArray(completion.choices[0]?.message?.content ?? '', 'vision flashcard');
+    },
     'vision',
-    logFallback
+    logFallback,
+    FREE_FALLBACK_OPTIONS
   );
-
-  const raw = completion.choices[0]?.message?.content ?? '';
-  let parsed: any[] = [];
-  try {
-    const cleaned = raw.replace(/```json\n?/g, '').replace(/```\n?/g, '').trim();
-    const match = cleaned.match(/\[[\s\S]*\]/);
-    parsed = match ? JSON.parse(match[0]) : [];
-    if (!Array.isArray(parsed)) parsed = [];
-  } catch {
-    return [];
-  }
 
   const baseTags = [
     sanitizeTag(source.fileName.replace(/\.[^.]+$/, '')),
@@ -280,39 +289,33 @@ Return ONLY a valid JSON array, no prose, no markdown fences. Each element:
 All numbers are percentages of image dimensions (0–100). Cover every study-relevant label (LABELED) or key structure (UNLABELED), subject to the protected-content rules above.`;
 
   const dataUrl = toDataUrl(imagePath);
-  const completion: any = await runWithModelFallback(
+  const parsed: any[] = await runWithModelFallback(
     VISION_MODELS,
-    model => groq.chat.completions.create({
-      model,
-      temperature: 0.2,
-      max_completion_tokens: 900,
-      ...reasoningOptions(model),
-      messages: [{
-        role: 'user',
-        content: [
-          { type: 'image_url', image_url: { url: dataUrl } },
-          { type: 'text', text: prompt },
-        ],
-      }],
-    } as any),
+    async model => {
+      const completion: any = await groq.chat.completions.create({
+        model,
+        temperature: 0.2,
+        max_completion_tokens: 900,
+        ...reasoningOptions(model),
+        messages: [{
+          role: 'user',
+          content: [
+            { type: 'image_url', image_url: { url: dataUrl } },
+            { type: 'text', text: prompt },
+          ],
+        }],
+      } as any);
+      return parseJsonArray(completion.choices[0]?.message?.content ?? '', 'occlusion');
+    },
     'vision',
-    logFallback
+    logFallback,
+    FREE_FALLBACK_OPTIONS
   );
-
-  const raw = completion.choices[0]?.message?.content ?? '';
-  try {
-    const cleaned = raw.replace(/```json\n?/g, '').replace(/```\n?/g, '').trim();
-    const match = cleaned.match(/\[[\s\S]*\]/);
-    const parsed = match ? JSON.parse(match[0]) : [];
-    if (!Array.isArray(parsed)) return [];
-    return parsed.filter((r: any) =>
-      r && typeof r.label === 'string' &&
-      typeof r.x === 'number' && typeof r.y === 'number' &&
-      typeof r.width === 'number' && typeof r.height === 'number'
-    );
-  } catch {
-    return [];
-  }
+  return parsed.filter((r: any) =>
+    r && typeof r.label === 'string' &&
+    typeof r.x === 'number' && typeof r.y === 'number' &&
+    typeof r.width === 'number' && typeof r.height === 'number'
+  );
 }
 
 export async function regenerateCard(
@@ -341,7 +344,8 @@ Return a JSON object only (no markdown): { "front": "...", "back": "..." }`,
       }],
     } as any),
     'text-generation',
-    logFallback
+    logFallback,
+    FREE_FALLBACK_OPTIONS
   );
 
   const raw = completion.choices[0]?.message?.content ?? '{}';

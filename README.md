@@ -8,12 +8,13 @@ AnkiForge processes PDFs, images, Word documents, and text files, then uses larg
 
 ## Features
 
-- **Free multi-model generation** — GPT-OSS 20B, Qwen 3.6 27B, and GPT-OSS 120B automatically take over when another model reaches its free limit
+- **Free multi-model generation** — GPT-OSS 20B, Qwen 3.6 27B, Qwen 3.8 27B, and GPT-OSS 120B automatically take over when another model reaches its free limit
+- **Short-limit recovery** — AnkiForge follows Groq's reset header and retries after brief per-minute limits instead of misreporting every 429 as a daily exhaustion
 - **Token-efficient cards** — compact prompts, low reasoning, and larger chunks preserve the daily free allowance
 - **Recoverable progress** — completed cards are saved after every page and remain available after a browser refresh or partial run
 - **Image occlusion** — anatomy diagrams are automatically detected; text labels are extracted with pixel-perfect bounding boxes (PyMuPDF) and turned into occlusion masks
 - **Vision fallback** — pages without embedded text (tables, charts, slides) are read by a multimodal LLM (Qwen 3.6 27B)
-- **Per-page extraction** — PyMuPDF extracts text page-by-page, preserving reading order
+- **Per-page extraction** — PyMuPDF is used when available; bundled PDF.js preserves every page and occlusion label when Python is missing or fails
 - **Preview & Edit** — review every card before export; edit, regenerate, duplicate, or delete
 - **Anki export** — downloads a `.apkg` deck ready to import into Anki
 
@@ -25,8 +26,8 @@ AnkiForge processes PDFs, images, Word documents, and text files, then uses larg
 |-------|-----------|
 | Frontend | React 19 · Vite 8 · Tailwind CSS 4 · TypeScript |
 | Backend | Node.js · Express · TypeScript · ts-node |
-| AI | Groq SDK — free text fallback pool (`gpt-oss-20b` → `qwen3.6-27b` → `gpt-oss-120b`) · Qwen vision |
-| PDF processing | PyMuPDF (`fitz`) via Python subprocess |
+| AI | Groq SDK — free text fallback pool (`gpt-oss-20b` → `qwen3.6-27b` → `qwen3.8-27b` → `gpt-oss-120b`) · Qwen vision |
+| PDF processing | PyMuPDF (`fitz`) when available · bundled PDF.js fallback |
 | Anki export | `anki-apkg-export` |
 
 ---
@@ -34,7 +35,7 @@ AnkiForge processes PDFs, images, Word documents, and text files, then uses larg
 ## Prerequisites
 
 - **Node.js** ≥ 18
-- **Python 3** with PyMuPDF installed:
+- Optional: **Python 3** with PyMuPDF for the fastest PDF processing. Bundled PDF.js is used automatically without it:
   ```bash
   pip3 install pymupdf
   ```
@@ -69,8 +70,8 @@ Open `server/.env` and fill in:
 
 ```
 GROQ_API_KEY=gsk_...   # your Groq API key
-GROQ_TEXT_MODELS=openai/gpt-oss-20b,qwen/qwen3.6-27b,openai/gpt-oss-120b
-GROQ_VISION_MODELS=qwen/qwen3.6-27b
+GROQ_TEXT_MODELS=openai/gpt-oss-20b,qwen/qwen3.6-27b,qwen/qwen3.8-27b,openai/gpt-oss-120b
+GROQ_VISION_MODELS=qwen/qwen3.6-27b,qwen/qwen3.8-27b
 PORT=3001
 ```
 
@@ -110,7 +111,8 @@ AnkiForge/
 │   │   ├── services/        # Core logic
 │   │   │   ├── aiGenerator.ts   # Groq card generation & occlusion detection
 │   │   │   ├── extraction.ts    # PDF/image/docx text extraction
-│   │   │   └── pdfRenderer.ts   # PyMuPDF page rendering & label extraction
+│   │   │   ├── pdfRenderer.ts   # PyMuPDF page rendering & label extraction
+│   │   │   └── pdfJsFallback.ts # Bundled per-page extraction, labels & rendering
 │   │   ├── middleware/      # Multer file upload middleware
 │   │   ├── utils/           # Job store, helpers
 │   │   └── types/           # Server-side types
@@ -137,6 +139,14 @@ AnkiForge/
 ---
 
 ## Version History
+
+### v1.2.0 — Reliable PDF and free-limit recovery
+- Added bundled PDF.js per-page extraction, label coordinates, and rendering when PyMuPDF is unavailable
+- Removed the page-collapsing `pdf-parse` fallback that could disable image occlusion
+- Added Qwen 3.8 27B to the free text and vision fallback pools
+- Added bounded retries for short Groq per-minute resets while preserving daily-limit recovery
+- Made malformed/truncated JSON responses advance to the next free model instead of silently losing a chunk
+- Improved limit messages so the app does not claim every 429 is a daily exhaustion
 
 ### v1.1.0 — Free multi-model generation
 - Added automatic free-model fallback when Groq returns a rate limit or model error
